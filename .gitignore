@@ -1,4 +1,15 @@
-.venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
+
+# 환경 변수 (절대 커밋 금지)
 .env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
