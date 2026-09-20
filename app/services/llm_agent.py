@@ -33,4 +33,8 @@ class LLMAgent:
 
         # 비동기 LLM 호출
         result: LLMAnalysisOutput = await self.structured_llm.ainvoke(messages)
+
+        # LLM이 계약(최대 5개)을 넘겨 반환하더라도 응답 전체가 실패하지 않도록
+        # 스키마 제약 대신 여기서 슬라이싱으로 정규화합니다.
+        result.tags = result.tags[:5]
         return result
