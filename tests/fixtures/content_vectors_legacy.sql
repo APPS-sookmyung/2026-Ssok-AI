@@ -7,18 +7,12 @@ CREATE TABLE IF NOT EXISTS content_vectors (
     bookmark_id BIGINT PRIMARY KEY,          -- 스프링 메인 DB의 북마크 PK
     space_id    BIGINT NOT NULL,             -- 개인/팀 스페이스 구분 (검색 격리용)
     embedding   vector(768) NOT NULL,
-    title       TEXT,                        -- 검색용 제목 (기존 행은 NULL)
-    summary     TEXT,                        -- 검색용 요약
-    saved_at    TIMESTAMPTZ,                  -- 실제 북마크 저장 시각, 기본값 없음
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_content_vectors_space
     ON content_vectors (space_id);
-
-CREATE INDEX IF NOT EXISTS idx_content_vectors_saved_at
-    ON content_vectors (saved_at);
 
 -- 코사인 거리 기준 ANN 인덱스.
 -- 데이터가 쌓인 뒤에 만들 예정
