@@ -13,10 +13,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.repositories.content_vectors import ContentVectorRepository
 from app.schemas.embedding import BookmarkContent
 from app.services.embedding import EmbeddingService
+from app.services.analysis_completion import save_embedding_and_notify
 
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL is required")
 class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
+    schema_files = ("content_vectors_metadata.sql",)
+
     async def asyncSetUp(self):
         url = os.environ["TEST_DATABASE_URL"].replace("postgresql+asyncpg://", "postgresql://", 1)
         self.connection = await asyncpg.connect(url)
@@ -24,8 +27,15 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
         await self.connection.execute(f'CREATE SCHEMA "{self.schema}"')
         self.addAsyncCleanup(self.cleanup)
         await self.connection.execute(f'SET search_path TO "{self.schema}", public')
-        fixture = Path(__file__).parent / "fixtures" / "content_vectors_metadata.sql"
-        await self.connection.execute(fixture.read_text(encoding="utf-8"))
+        for filename in self.schema_files:
+            fixture = Path(__file__).parent / "fixtures" / filename
+            await self.connection.execute(fixture.read_text(encoding="utf-8"))
+            if filename == "content_vectors_before_metadata.sql":
+                await self.connection.execute(
+                    "INSERT INTO content_vectors (bookmark_id, space_id, embedding) "
+                    "VALUES (999, 7, $1::text::vector)",
+                    "[" + ",".join(["1"] + ["0"] * 767) + "]",
+                )
         self.engine = create_async_engine(
             url.replace("postgresql://", "postgresql+asyncpg://", 1),
             connect_args={"server_settings": {"search_path": f"{self.schema},public"}},
@@ -42,7 +52,7 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
         await self.connection.close()
 
     async def row(self):
-        return await self.connection.fetchrow("SELECT *, embedding::text AS vector_text FROM content_vectors")
+        return await self.connection.fetchrow("SELECT *, embedding::text AS vector_text FROM content_vectors WHERE bookmark_id = 123")
 
     async def test_insert_and_update(self):
         await self.store.upsert(self.content, self.vector)
@@ -51,7 +61,7 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
                           saved_at=datetime(2026, 2, 1, tzinfo=timezone.utc))
         await self.store.upsert(changed, [0.0, 1.0] + [0.0] * 766)
         after = await self.row()
-        self.assertEqual(await self.connection.fetchval("SELECT count(*) FROM content_vectors"), 1)
+        self.assertEqual(await self.connection.fetchval("SELECT count(*) FROM content_vectors WHERE bookmark_id = 123"), 1)
         self.assertEqual((after["space_id"], after["title"], after["summary"], after["saved_at"]),
                          (9, changed.title, changed.summary, changed.saved_at))
         self.assertEqual(after["created_at"], before["created_at"])
@@ -83,3 +93,50 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.store.upsert(self.content, [1.0])
         self.assertEqual(await self.row(), before)
+
+    async def test_database_failure_still_calls_success_notification(self):
+        await self.store.upsert(self.content, self.vector)
+        before = await self.row()
+        await self.connection.execute("ALTER TABLE content_vectors ADD CHECK (space_id <> 888)")
+        provider, notify = AsyncMock(), AsyncMock()
+        provider.embed_document.return_value = self.vector
+        with self.assertLogs("app.services.analysis_completion", level="WARNING"):
+            saved = await save_embedding_and_notify(
+                build_content=lambda: replace(self.content, space_id=888),
+                embedding_service=EmbeddingService(provider, self.store, 768),
+                notify=notify,
+            )
+        self.assertFalse(saved)
+        notify.assert_awaited_once_with()
+        self.assertEqual(await self.row(), before)
+
+    async def test_locked_row_timeout_preserves_data_and_notifies(self):
+        await self.store.upsert(self.content, self.vector)
+        before = await self.row()
+        provider, notify = AsyncMock(), AsyncMock()
+        provider.embed_document.return_value = self.vector
+        async with self.connection.transaction():
+            await self.connection.execute("SELECT 1 FROM content_vectors WHERE bookmark_id = 123 FOR UPDATE")
+            with self.assertLogs("app.services.analysis_completion", level="WARNING"):
+                saved = await save_embedding_and_notify(
+                    build_content=lambda: replace(self.content, title="대기 중 변경"),
+                    embedding_service=EmbeddingService(provider, self.store, 768),
+                    notify=notify,
+                    timeout_seconds=0.2,
+                )
+            self.assertFalse(saved)
+            notify.assert_awaited_once_with()
+            self.assertEqual(await self.row(), before)
+        await self.store.upsert(replace(self.content, title="잠금 해제 후 저장"), self.vector)
+        self.assertEqual((await self.row())["title"], "잠금 해제 후 저장")
+
+
+class MigratedVectorStorageTests(VectorStorageTests):
+    schema_files = ("content_vectors_before_metadata.sql", "add_vector_metadata.sql")
+
+    async def test_legacy_row_remains_without_invented_metadata(self):
+        row = await self.connection.fetchrow("SELECT * FROM content_vectors WHERE bookmark_id = 999")
+        self.assertEqual(row["space_id"], 7)
+        self.assertIsNone(row["title"])
+        self.assertIsNone(row["summary"])
+        self.assertIsNone(row["saved_at"])
