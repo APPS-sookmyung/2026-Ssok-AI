@@ -124,6 +124,7 @@ async def _analyze_and_notify(req: SummaryRequest) -> None:
         result = SummaryResponse(
             bookmark_id=req.bookmark_id,
             status=AnalysisStatus.FAILED,
+            title=title,
             error_message="웹페이지 본문을 추출할 수 없거나 내용이 너무 짧습니다.",
         )
         await _send_callback(str(req.callback_url), result)
@@ -135,12 +136,14 @@ async def _analyze_and_notify(req: SummaryRequest) -> None:
         result = SummaryResponse(
             bookmark_id=req.bookmark_id,
             status=AnalysisStatus.SUCCESS,
+            title=title,
             analysis=analysis,
         )
     except Exception as e:
         result = SummaryResponse(
             bookmark_id=req.bookmark_id,
             status=AnalysisStatus.FAILED,
+            title=title,
             error_message=f"Gemini API 처리 중 오류 발생: {str(e)}",
         )
 

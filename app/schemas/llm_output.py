@@ -27,5 +27,6 @@ class AnalysisStatus(str, Enum):
 class SummaryResponse(BaseModel):
     bookmark_id: int
     status: AnalysisStatus
+    title: Optional[str] = Field(default=None, description="크롤러가 HTML <title> 태그에서 추출한 제목")
     analysis: Optional[LLMAnalysisOutput] = None
     error_message: Optional[str] = None
