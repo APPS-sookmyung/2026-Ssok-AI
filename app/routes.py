@@ -1,10 +1,12 @@
 # app/routes.py
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, status
 
+from app.config import settings
 from app.schemas.llm_output import AnalysisStatus, SummaryRequest, SummaryResponse
 from app.services.scraper import UnsafeUrlError, WebScraper, _assert_safe_url
 from app.services.llm_agent import LLMAgent
@@ -22,21 +24,39 @@ CALLBACK_TIMEOUT_SECONDS = 10
 CALLBACK_RETRY_DELAYS_SECONDS = (1.0, 3.0, 8.0)
 
 
+def _is_allowed_callback_target(callback_url: str) -> bool:
+    """settings.CALLBACK_ALLOWED_HOSTS에 등록된 호스트(":포트" 포함 가능)인지 확인합니다.
+
+    AI 서버와 스프링 서버를 같은 내부망(예: 같은 EC2)에 배포하면 콜백 주소가
+    사설 IP나 localhost로 해석되어 공인 주소만 허용하는 SSRF 검증에 막힌다.
+    배포 환경의 실제 콜백 호스트를 설정값으로 등록해두면 그 호스트에 대해서만
+    검증을 건너뛴다. 등록된 호스트가 없으면 항상 False를 반환해 기존 정책
+    (공인 주소만 허용)을 그대로 쓴다.
+    """
+    allowed = {h.strip().lower() for h in settings.CALLBACK_ALLOWED_HOSTS.split(",") if h.strip()}
+    if not allowed:
+        return False
+    parsed = urlparse(callback_url)
+    return bool(parsed.hostname) and (parsed.hostname.lower() in allowed or parsed.netloc.lower() in allowed)
+
+
 async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
     """분석 결과를 콜백 URL로 전송합니다. 콜백 실패는 예외로 전파하지 않고 로그만 남깁니다.
 
-    callback_url은 요청자가 직접 지정하므로 scraper의 SSRF 검증을 재사용해
-    내부망·예약 주소로의 전송을 막습니다. DNS 조회는 이벤트 루프를 막으므로
-    별도 스레드에서 실행하고, 리다이렉트는 재검증 없이 따라가지 않도록 끕니다.
+    callback_url은 요청자가 직접 지정하므로, settings.CALLBACK_ALLOWED_HOSTS에
+    등록되지 않은 호스트라면 scraper의 SSRF 검증을 재사용해 내부망·예약
+    주소로의 전송을 막습니다. DNS 조회는 이벤트 루프를 막으므로 별도
+    스레드에서 실행하고, 리다이렉트는 재검증 없이 따라가지 않도록 끕니다.
 
     네트워크 오류나 백엔드 서버 오류(5xx 응답)는 지수 백오프로 재시도합니다.
     4xx 응답은 재시도해도 결과가 같을 가능성이 높아 재시도하지 않습니다.
     """
-    try:
-        await asyncio.to_thread(_assert_safe_url, callback_url)
-    except UnsafeUrlError as e:
-        logger.error("콜백 URL이 안전하지 않아 전송을 건너뜁니다 (bookmark_id=%s): %s", result.bookmark_id, e)
-        return
+    if not _is_allowed_callback_target(callback_url):
+        try:
+            await asyncio.to_thread(_assert_safe_url, callback_url)
+        except UnsafeUrlError as e:
+            logger.error("콜백 URL이 안전하지 않아 전송을 건너뜁니다 (bookmark_id=%s): %s", result.bookmark_id, e)
+            return
 
     payload = result.model_dump(mode="json")
     total_attempts = len(CALLBACK_RETRY_DELAYS_SECONDS) + 1
