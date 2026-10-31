@@ -18,6 +18,8 @@ llm_agent = LLMAgent()
 SCRAPE_TIMEOUT_SECONDS = 15
 # 스프링 콜백 전송에 부여하는 시간 제한(초)
 CALLBACK_TIMEOUT_SECONDS = 10
+# 콜백 전송 실패 시 재시도 사이의 대기 시간(초). 길이가 재시도 횟수(여기서는 3회)입니다.
+CALLBACK_RETRY_DELAYS_SECONDS = (1.0, 3.0, 8.0)
 
 
 async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
@@ -26,6 +28,9 @@ async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
     callback_url은 요청자가 직접 지정하므로 scraper의 SSRF 검증을 재사용해
     내부망·예약 주소로의 전송을 막습니다. DNS 조회는 이벤트 루프를 막으므로
     별도 스레드에서 실행하고, 리다이렉트는 재검증 없이 따라가지 않도록 끕니다.
+
+    네트워크 오류나 백엔드 서버 오류(5xx 응답)는 지수 백오프로 재시도합니다.
+    4xx 응답은 재시도해도 결과가 같을 가능성이 높아 재시도하지 않습니다.
     """
     try:
         await asyncio.to_thread(_assert_safe_url, callback_url)
@@ -33,16 +38,39 @@ async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
         logger.error("콜백 URL이 안전하지 않아 전송을 건너뜁니다 (bookmark_id=%s): %s", result.bookmark_id, e)
         return
 
-    try:
-        await asyncio.to_thread(
-            requests.post,
-            callback_url,
-            json=result.model_dump(mode="json"),
-            timeout=CALLBACK_TIMEOUT_SECONDS,
-            allow_redirects=False,
-        )
-    except Exception as e:
-        logger.error("콜백 전송 실패 (bookmark_id=%s): %s", result.bookmark_id, e)
+    payload = result.model_dump(mode="json")
+    total_attempts = len(CALLBACK_RETRY_DELAYS_SECONDS) + 1
+
+    for attempt in range(1, total_attempts + 1):
+        try:
+            response = await asyncio.to_thread(
+                requests.post,
+                callback_url,
+                json=payload,
+                timeout=CALLBACK_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+            if response.status_code < 500:
+                if response.status_code >= 400:
+                    logger.error(
+                        "콜백이 거부되어 재시도하지 않습니다 (bookmark_id=%s): status=%s",
+                        result.bookmark_id, response.status_code,
+                    )
+                return
+            logger.warning(
+                "콜백 전송 실패, 재시도 예정 (bookmark_id=%s, 시도 %s/%s): status=%s",
+                result.bookmark_id, attempt, total_attempts, response.status_code,
+            )
+        except Exception as e:
+            logger.warning(
+                "콜백 전송 실패, 재시도 예정 (bookmark_id=%s, 시도 %s/%s): %s",
+                result.bookmark_id, attempt, total_attempts, e,
+            )
+
+        if attempt <= len(CALLBACK_RETRY_DELAYS_SECONDS):
+            await asyncio.sleep(CALLBACK_RETRY_DELAYS_SECONDS[attempt - 1])
+
+    logger.error("콜백 전송이 재시도 횟수를 모두 소진해 실패했습니다 (bookmark_id=%s)", result.bookmark_id)
 
 
 async def _analyze_and_notify(req: SummaryRequest) -> None:
