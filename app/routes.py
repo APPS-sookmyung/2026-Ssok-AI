@@ -71,9 +71,12 @@ async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
                 allow_redirects=False,
             )
             if response.status_code < 500:
-                if response.status_code >= 400:
+                if response.status_code >= 300:
+                    # allow_redirects=False라 3xx도 그대로 반환된다. 리다이렉트든
+                    # 거부든 재시도하지 않지만, 분석 결과가 전달되지 않았으므로
+                    # 운영자가 알 수 있도록 남긴다.
                     logger.error(
-                        "콜백이 거부되어 재시도하지 않습니다 (bookmark_id=%s): status=%s",
+                        "콜백이 성공 응답을 받지 못해 재시도하지 않습니다 (bookmark_id=%s): status=%s",
                         result.bookmark_id, response.status_code,
                     )
                 return
