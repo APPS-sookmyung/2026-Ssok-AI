@@ -6,7 +6,7 @@ import requests
 from fastapi import APIRouter, BackgroundTasks, status
 
 from app.schemas.llm_output import AnalysisStatus, SummaryRequest, SummaryResponse
-from app.services.scraper import WebScraper
+from app.services.scraper import UnsafeUrlError, WebScraper, _assert_safe_url
 from app.services.llm_agent import LLMAgent
 
 logger = logging.getLogger(__name__)
@@ -21,13 +21,25 @@ CALLBACK_TIMEOUT_SECONDS = 10
 
 
 async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
-    """분석 결과를 콜백 URL로 전송합니다. 콜백 실패는 예외로 전파하지 않고 로그만 남깁니다."""
+    """분석 결과를 콜백 URL로 전송합니다. 콜백 실패는 예외로 전파하지 않고 로그만 남깁니다.
+
+    callback_url은 요청자가 직접 지정하므로 scraper의 SSRF 검증을 재사용해
+    내부망·예약 주소로의 전송을 막습니다. DNS 조회는 이벤트 루프를 막으므로
+    별도 스레드에서 실행하고, 리다이렉트는 재검증 없이 따라가지 않도록 끕니다.
+    """
+    try:
+        await asyncio.to_thread(_assert_safe_url, callback_url)
+    except UnsafeUrlError as e:
+        logger.error("콜백 URL이 안전하지 않아 전송을 건너뜁니다 (bookmark_id=%s): %s", result.bookmark_id, e)
+        return
+
     try:
         await asyncio.to_thread(
             requests.post,
             callback_url,
             json=result.model_dump(mode="json"),
             timeout=CALLBACK_TIMEOUT_SECONDS,
+            allow_redirects=False,
         )
     except Exception as e:
         logger.error("콜백 전송 실패 (bookmark_id=%s): %s", result.bookmark_id, e)

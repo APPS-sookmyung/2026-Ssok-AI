@@ -25,4 +25,10 @@ class GeminiQueryEmbeddingProvider:
         )
 
     async def embed_query(self, query: str) -> Sequence[float]:
-        return await self._embeddings.aembed_query(query, task_type=_QUERY_TASK_TYPE)
+        # gemini-embedding-001의 기본 출력은 3072차원이므로 저장된 벡터(768차원)와
+        # 맞추려면 output_dimensionality를 반드시 지정해야 합니다.
+        return await self._embeddings.aembed_query(
+            query,
+            task_type=_QUERY_TASK_TYPE,
+            output_dimensionality=settings.EMBEDDING_DIM,
+        )
