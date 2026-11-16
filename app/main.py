@@ -7,17 +7,25 @@ from fastapi import FastAPI
 from app.api.search import router as search_router
 from app.config import settings
 from app.db.session import AsyncSessionLocal, engine
+from app.repositories.content_vectors import ContentVectorRepository
 from app.repositories.search import PostgresSearchRepository
 from app.routes import router as ai_router
-from app.services.query_embedding import GeminiQueryEmbeddingProvider
+from app.services.embedding import EmbeddingService
+from app.services.query_embedding import GeminiEmbeddingProvider
 from app.services.retrieval import SearchService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """검색 서비스를 앱 수명 동안 한 번만 만들어 공유하고, 종료 시 DB 연결을 정리합니다."""
+    """분석 저장과 검색에 동일한 임베딩 모델을 주입합니다."""
+    provider = GeminiEmbeddingProvider()
+    app.state.embedding_service = EmbeddingService(
+        provider=provider,
+        store=ContentVectorRepository(AsyncSessionLocal, settings.EMBEDDING_DIM),
+        dimensions=settings.EMBEDDING_DIM,
+    )
     app.state.search_service = SearchService(
-        provider=GeminiQueryEmbeddingProvider(),
+        provider=provider,
         repository=PostgresSearchRepository(AsyncSessionLocal),
         dimensions=settings.EMBEDDING_DIM,
     )

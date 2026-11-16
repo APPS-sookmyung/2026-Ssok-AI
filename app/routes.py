@@ -4,10 +4,13 @@ import logging
 from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, BackgroundTasks, status
+from fastapi import APIRouter, BackgroundTasks, Request, status
 
 from app.config import settings
+from app.schemas.embedding import BookmarkContent
 from app.schemas.llm_output import AnalysisStatus, SummaryRequest, SummaryResponse
+from app.services.analysis_completion import save_embedding_and_notify
+from app.services.embedding import EmbeddingService
 from app.services.scraper import UnsafeUrlError, WebScraper, _assert_safe_url
 from app.services.llm_agent import LLMAgent
 
@@ -96,7 +99,7 @@ async def _send_callback(callback_url: str, result: SummaryResponse) -> None:
     logger.error("콜백 전송이 재시도 횟수를 모두 소진해 실패했습니다 (bookmark_id=%s)", result.bookmark_id)
 
 
-async def _analyze_and_notify(req: SummaryRequest) -> None:
+async def _analyze_and_notify(req: SummaryRequest, embedding_service: EmbeddingService) -> None:
     """
     실제 크롤링·요약을 백그라운드에서 수행하고, 결과를 callback_url로 전송합니다.
     (엔드포인트는 이미 202 응답을 반환한 뒤이므로 여기서는 예외를 올리지 않습니다.)
@@ -133,12 +136,6 @@ async def _analyze_and_notify(req: SummaryRequest) -> None:
     try:
         # 2. Gemini 요약 및 태깅 수행
         analysis = await llm_agent.summarize_and_tag(title=title, content=content)
-        result = SummaryResponse(
-            bookmark_id=req.bookmark_id,
-            status=AnalysisStatus.SUCCESS,
-            title=title,
-            analysis=analysis,
-        )
     except Exception as e:
         result = SummaryResponse(
             bookmark_id=req.bookmark_id,
@@ -146,8 +143,24 @@ async def _analyze_and_notify(req: SummaryRequest) -> None:
             title=title,
             error_message=f"Gemini API 처리 중 오류 발생: {str(e)}",
         )
+        await _send_callback(str(req.callback_url), result)
+        return
 
-    await _send_callback(str(req.callback_url), result)
+    result = SummaryResponse(
+        bookmark_id=req.bookmark_id, status=AnalysisStatus.SUCCESS, title=title, analysis=analysis,
+    )
+    if req.space_id is None or req.saved_at is None:
+        await _send_callback(str(req.callback_url), result)
+        return
+
+    await save_embedding_and_notify(
+        build_content=lambda: BookmarkContent(
+            bookmark_id=req.bookmark_id, space_id=req.space_id, saved_at=req.saved_at,
+            title=title or "", summary=analysis.summary, tags=tuple(analysis.tags),
+        ),
+        embedding_service=embedding_service,
+        notify=lambda: _send_callback(str(req.callback_url), result),
+    )
 
 
 @router.post(
@@ -155,10 +168,10 @@ async def _analyze_and_notify(req: SummaryRequest) -> None:
     response_model=SummaryResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
-async def analyze_bookmark(req: SummaryRequest, background_tasks: BackgroundTasks):
+async def analyze_bookmark(req: SummaryRequest, background_tasks: BackgroundTasks, request: Request):
     """
     URL을 받아 즉시 접수(202) 응답을 반환하고, 크롤링·요약은 백그라운드에서
     수행한 뒤 결과를 req.callback_url로 비동기 전송합니다.
     """
-    background_tasks.add_task(_analyze_and_notify, req)
+    background_tasks.add_task(_analyze_and_notify, req, request.app.state.embedding_service)
     return SummaryResponse(bookmark_id=req.bookmark_id, status=AnalysisStatus.PROCESSING)

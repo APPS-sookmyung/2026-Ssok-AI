@@ -18,7 +18,7 @@ _UPSERT = text("""
         embedding = EXCLUDED.embedding,
         title = EXCLUDED.title,
         summary = EXCLUDED.summary,
-        saved_at = EXCLUDED.saved_at,
+        saved_at = COALESCE(content_vectors.saved_at, EXCLUDED.saved_at),
         updated_at = CURRENT_TIMESTAMP
 """)
 
