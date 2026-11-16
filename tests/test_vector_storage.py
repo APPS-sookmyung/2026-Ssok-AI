@@ -36,6 +36,8 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
                     "VALUES (999, 7, $1::text::vector)",
                     "[" + ",".join(["1"] + ["0"] * 767) + "]",
                 )
+        migration = Path(__file__).resolve().parents[1] / "sql" / "003_vector_deletions.sql"
+        await self.connection.execute(migration.read_text(encoding="utf-8"))
         self.engine = create_async_engine(
             url.replace("postgresql://", "postgresql+asyncpg://", 1),
             connect_args={"server_settings": {"search_path": f"{self.schema},public"}},

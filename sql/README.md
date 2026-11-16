@@ -14,6 +14,7 @@
 
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001_init_pgvector.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/003_vector_deletions.sql
 ```
 
 ## 기존 DB
@@ -23,12 +24,15 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/001_init_pgvector.sql
 
 ```sh
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/002_add_vector_metadata.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/003_vector_deletions.sql
 ```
 
 002는 하나의 트랜잭션으로 실행하며 재실행할 수 있습니다. 기존 행·벡터·시간
 필드는 유지하고 title, summary, saved_at만 NULL 상태로 추가합니다.
 기존 데이터가 많은 공유 DB에서는 ALTER TABLE과 색인 생성이 잠금을 사용하므로
 실행 시점을 조율합니다. 임의의 기존 동명 컬럼/색인 구조까지 교정하지는 않습니다.
+
+003은 삭제된 북마크·스페이스 ID를 기록할 `vector_deletions`를 추가합니다. 벡터 쓰기와 삭제 모두 이 테이블을 사용하므로 애플리케이션 배포 전에 적용합니다. 재실행할 수 있으며, 기존 벡터는 그대로 유지됩니다.
 
 ## 필드 의미
 
