@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.search import router as search_router
+from app.api.vectors import router as vectors_router
 from app.config import settings
 from app.db.session import AsyncSessionLocal, engine
 from app.repositories.search import PostgresSearchRepository
@@ -36,6 +37,7 @@ app = FastAPI(
 
 app.include_router(ai_router)
 app.include_router(search_router)
+app.include_router(vectors_router)
 
 @app.get("/")
 def health_check():

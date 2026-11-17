@@ -1,4 +1,5 @@
 # app/config.py
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +18,8 @@ class Settings(BaseSettings):
     # 경우에만 실제 배포 환경의 콜백 호스트를 여기 등록한다. 비워두면 기존처럼
     # 공인 주소만 허용한다.
     CALLBACK_ALLOWED_HOSTS: str = ""
+    # Spring → AI 벡터 삭제 요청에 사용하는 공유 시크릿
+    VECTOR_DELETE_SECRET: SecretStr | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

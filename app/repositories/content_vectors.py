@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.repositories.vector_deletions import check_vector_target
 from app.schemas.embedding import BookmarkContent, validate_embedding
 
 
@@ -41,4 +42,5 @@ class ContentVectorRepository:
             "saved_at": content.saved_at,
         }
         async with self.sessions.begin() as session:
+            await check_vector_target(session, content.bookmark_id, content.space_id)
             await session.execute(_UPSERT, parameters)
