@@ -11,6 +11,7 @@ import httpx
 from pydantic import SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.datastructures import State
 
 from app.repositories.content_vectors import ContentVectorRepository
 from app.repositories.search import PostgresSearchRepository
@@ -50,6 +51,8 @@ class VectorDeletionTests(unittest.IsolatedAsyncioTestCase):
             async with self.sessions() as session:
                 yield session
 
+        self.enterContext(patch.dict(os.environ, {"AI_SERVICE_SECRET": "search-test"}))
+        self.enterContext(patch.object(app, "state", State()))
         self.enterContext(patch.dict(app.dependency_overrides, {get_session: test_session}))
         provider = AsyncMock()
         provider.embed_query.return_value = self.vector
@@ -67,7 +70,8 @@ class VectorDeletionTests(unittest.IsolatedAsyncioTestCase):
                                datetime(2026, 11, 14, tzinfo=timezone.utc))
 
     async def search(self, space_ids):
-        response = await self.client.post("/api/v1/ai/search", json={"query": "리액트", "space_ids": space_ids})
+        response = await self.client.post("/api/v1/ai/search", json={"query": "리액트", "space_ids": space_ids},
+                                          headers={"X-AI-Service-Secret": "search-test"})
         self.assertEqual(response.status_code, 200, response.text)
         return sorted(item["bookmark_id"] for item in response.json()["results"])
 
@@ -146,12 +150,24 @@ class VectorDeletionTests(unittest.IsolatedAsyncioTestCase):
                         await asyncio.sleep(0.01)
         self.assertEqual(await self.search([7]), [])
 
+    async def test_locked_delete_times_out_without_changes_and_can_retry(self):
+        await self.store.upsert(self.content(51, 7), self.vector)
+        async with self.sessions.begin() as writer:
+            await check_vector_target(writer, 51, 7)
+            with patch("app.api.vectors.DELETE_TIMEOUT_SECONDS", 0.1):
+                response = await self.client.delete(self.url + "/51", headers=self.headers)
+            self.assertEqual(response.status_code, 504)
+        self.assertEqual(await self.search([7]), [51])
+        self.assertEqual(await self.db.fetchval("SELECT count(*) FROM vector_deletions"), 0)
+        await self.delete("/51")
+        self.assertEqual(await self.search([7]), [])
+
     async def test_failed_delete_rolls_back_marker_and_can_retry(self):
         await self.store.upsert(self.content(41, 7), self.vector)
         await self.db.execute("CREATE TABLE held_bookmark (id bigint REFERENCES content_vectors(bookmark_id))")
         await self.db.execute("INSERT INTO held_bookmark VALUES (41)")
         response = await self.client.delete(self.url + "/41", headers=self.headers)
-        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.status_code, 503)
         self.assertEqual(await self.search([7]), [41])
         self.assertEqual(await self.db.fetchval("SELECT count(*) FROM vector_deletions"), 0)
         await self.db.execute("DELETE FROM held_bookmark WHERE id = 41")
