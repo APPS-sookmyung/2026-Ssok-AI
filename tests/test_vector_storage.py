@@ -63,7 +63,7 @@ class VectorStorageTests(unittest.IsolatedAsyncioTestCase):
         after = await self.row()
         self.assertEqual(await self.connection.fetchval("SELECT count(*) FROM content_vectors WHERE bookmark_id = 123"), 1)
         self.assertEqual((after["space_id"], after["title"], after["summary"], after["saved_at"]),
-                         (9, changed.title, changed.summary, changed.saved_at))
+                         (9, changed.title, changed.summary, self.content.saved_at))
         self.assertEqual(after["created_at"], before["created_at"])
         self.assertGreater(after["updated_at"], before["updated_at"])
         self.assertNotEqual(after["vector_text"], before["vector_text"])
@@ -140,3 +140,6 @@ class MigratedVectorStorageTests(VectorStorageTests):
         self.assertIsNone(row["title"])
         self.assertIsNone(row["summary"])
         self.assertIsNone(row["saved_at"])
+        await self.store.upsert(replace(self.content, bookmark_id=999), self.vector)
+        saved_at = await self.connection.fetchval("SELECT saved_at FROM content_vectors WHERE bookmark_id = 999")
+        self.assertEqual(saved_at, self.content.saved_at)

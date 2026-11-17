@@ -2,15 +2,11 @@
 
 ## 구현 범위
 
-기존 이슈 #8의 검색 스키마, 독립 라우터, 검색어 임베딩 인터페이스와 PostgreSQL 검색 저장소를 구현했습니다. 운영 진입점과 채아 님의 분석 라우터는 수정하지 않았습니다.
-
-실제 모델 어댑터는 아직 없습니다. 검색어 모델은 북마크 저장에 사용한 모델과 같은 벡터 공간과 출력 차원을 사용해야 합니다. 모델별 검색어 입력 방식을 적용할 수 있도록 embed_query 메서드를 별도로 정의했습니다.
-
-DB에는 PR #11의 title, summary, saved_at 컬럼이 필요합니다. dev 기준으로 분기했고 선행 PR의 코드나 커밋을 합치지는 않았습니다. 검색 테스트에는 PR #11 커밋 2770266의 초기화 SQL을 복사한 고정 스키마를 사용합니다. 머지 후 변경 여부를 확인해야 합니다.
+운영 앱은 문서와 검색어에 같은 Gemini 모델과 출력 차원을 사용합니다. PostgreSQL에는 [벡터 메타데이터 마이그레이션](../sql/README.md)이 필요합니다.
 
 ## 요청과 응답
 
-노션 명세 기준 경로는 POST /api/v1/ai/search입니다. 기존 이슈 #8에 적힌 /api/ai/search와 단일 space_id 대신 아래 형식을 구현했습니다. 이슈 본문과 노션은 이번 작업에서 수정하지 않았습니다.
+Spring은 로그인한 사용자가 속한 스페이스 ID를 계산해 `POST /api/v1/ai/search`로 보냅니다. 매 요청에 `X-AI-Service-Secret` 헤더가 필요합니다. 헤더 누락·불일치는 401, AI의 `AI_SERVICE_SECRET` 미설정은 503입니다.
 
 ```json
 {
@@ -67,7 +63,7 @@ DB에는 PR #11의 title, summary, saved_at 컬럼이 필요합니다. dev 기�
 .venv\Scripts\python.exe -m uvicorn app.search_app:create_app --factory --host 127.0.0.1 --port 8001
 ```
 
-http://127.0.0.1:8001/docs 에서 요청 형식을 확인할 수 있습니다. 모델과 저장소가 연결되지 않은 기본 앱에서도 아래 요청은 200과 빈 결과를 반환합니다.
+http://127.0.0.1:8001/docs 에서 요청 형식을 확인할 수 있습니다. 인증 후 아래 요청을 보내면 기본 앱에서도 200과 빈 결과를 반환합니다.
 
 ```json
 {"query": "리액트", "space_ids": [], "top_k": 5}
@@ -75,28 +71,7 @@ http://127.0.0.1:8001/docs 에서 요청 형식을 확인할 수 있습니다. �
 
 공간 ID가 있는 요청은 서비스 연결 전까지 503을 반환합니다. 임의 벡터를 만들어 실제 모델 검색인 것처럼 동작시키지 않습니다. API부터 실제 pgvector 검색까지의 흐름은 테스트에서 고정 벡터 제공자를 주입해 검증합니다.
 
-## 서비스 연결 예시
-
-모델 어댑터가 준비되면 아래와 같이 조립할 수 있습니다. provider는 비동기 embed_query 메서드를 구현해야 합니다. 검색 요청마다 새 엔진을 만들지 말고 앱 수명 동안 공유하고 종료 시 정리해야 합니다.
-
-```python
-from app.config import settings
-from app.db.session import AsyncSessionLocal
-from app.repositories.search import PostgresSearchRepository
-from app.search_app import create_app
-from app.services.retrieval import SearchService
-
-service = SearchService(
-    provider=provider,
-    repository=PostgresSearchRepository(AsyncSessionLocal),
-    dimensions=settings.EMBEDDING_DIM,
-)
-app = create_app(service)
-```
-
-운영 앱에는 app.api.search.router를 등록하고 app.state.search_service에 준비된 서비스를 지정하면 됩니다. app/main.py 연결은 PR #4 머지 후 진입점을 확인하고 적용해야 합니다.
-
-권한 판단은 문서대로 스프링이 담당합니다. AI는 전달받은 목록 안에서만 검색합니다. 이 목록 자체의 진위를 검증하는 사용자 인증은 구현하지 않았으므로, 운영 연결 시 신뢰할 수 있는 스프링 요청만 AI 서버에 도달하도록 해야 합니다.
+운영 진입점 `app.main:app`은 시작할 때 Gemini 제공자와 PostgreSQL 저장소를 연결합니다. [분석·저장 및 서버 간 인증 설정](embedding-storage.md)
 
 ## 테스트
 
@@ -111,10 +86,9 @@ DB 테스트를 실행하려면 별도 PostgreSQL 테스트 DB의 연결 문자�
 
 ## 남은 작업
 
-- 확정한 모델의 검색어 어댑터 연결과 실제 모델 호출 검증
+- 운영 키로 실제 문서·검색어 임베딩 검증
 - 실제 북마크 데이터로 유사도 기준과 키워드 가중치 조정
 - 날짜 필터 시간대 합의
-- 선행 PR 머지 후 실제 테이블과 운영 앱에 연결
 - 데이터 규모에 따른 HNSW 도입 검토
 
 노션 API 상태는 아직 실제 모델과 운영 연동 검증 전이므로 구현 중으로 유지하는 것이 맞습니다. 문서와 이슈 상태는 직접 변경하지 않았습니다.

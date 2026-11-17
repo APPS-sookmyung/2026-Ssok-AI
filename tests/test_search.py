@@ -4,8 +4,9 @@ import unittest
 from unittest.mock import AsyncMock
 
 import httpx
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
+from app.api.service_auth import SpringConnection
 from app.schemas.search import SearchRequest, SearchResult
 from app.search_app import create_app
 from app.services.retrieval import SearchService, SearchPolicy
@@ -20,8 +21,9 @@ class SearchTests(unittest.IsolatedAsyncioTestCase):
 
     async def call_api(self, payload, service=True):
         app = create_app(self.service if service else None)
+        app.state.spring_connection = SpringConnection(AI_SERVICE_SECRET=SecretStr("spring-test"))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            return await client.post("/api/v1/ai/search", json=payload)
+            return await client.post("/api/v1/ai/search", json=payload, headers={"X-AI-Service-Secret": "spring-test"})
 
     async def test_contract_and_query_embedding(self):
         response = await self.call_api({"query": "React", "space_ids": [3, 8, 3]})

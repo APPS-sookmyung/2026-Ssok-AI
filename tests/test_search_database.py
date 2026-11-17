@@ -8,8 +8,10 @@ from uuid import uuid4
 
 import asyncpg
 import httpx
+from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api.service_auth import SpringConnection
 from app.repositories.search import PostgresSearchRepository
 from app.schemas.search import SearchRequest
 from app.search_app import create_app
@@ -122,8 +124,10 @@ class SearchDatabaseTests(unittest.IsolatedAsyncioTestCase):
         await self.insert(123, title="React", similarity=0.8)
         await self.insert(456, space_id=9, title="React")
         app = create_app(self.service)
+        app.state.spring_connection = SpringConnection(AI_SERVICE_SECRET=SecretStr("spring-test"))
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post("/api/v1/ai/search", json={"query": "React", "space_ids": [3]})
+            response = await client.post("/api/v1/ai/search", json={"query": "React", "space_ids": [3]},
+                                         headers={"X-AI-Service-Secret": "spring-test"})
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["query"], "React")

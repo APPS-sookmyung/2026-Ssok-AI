@@ -112,7 +112,7 @@ class WebScraper:
 
             # 제목 추출을 위해 BeautifulSoup 파싱 (마찬가지로 bytes를 넘겨 인코딩 자동 판별)
             soup = BeautifulSoup(downloaded, 'html.parser')
-            title = soup.title.string.strip() if soup.title and soup.title.string else "No Title"
+            title = soup.title.get_text(strip=True) if soup.title else ""
 
             return title, text_content
         except Exception as e:

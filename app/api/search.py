@@ -2,12 +2,13 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.api.service_auth import require_spring
 from app.schemas.search import SearchRequest, SearchResponse
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/v1/ai", tags=["Search"])
+router = APIRouter(prefix="/api/v1/ai", tags=["Search"], dependencies=[Depends(require_spring)])
 
 
 @router.post("/search", response_model=SearchResponse, responses={
