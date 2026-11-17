@@ -7,7 +7,7 @@ from pydantic import AwareDatetime, BaseModel, Field, HttpUrl, field_validator, 
 
 # 1. API 요청 스키마
 class SummaryRequest(BaseModel):
-    bookmark_id: int = Field(description="북마크 식별자")
+    bookmark_id: int = Field(strict=True, gt=0, le=2**63 - 1, description="북마크 식별자")
     url: HttpUrl = Field(description="요약할 웹사이트 URL")
     callback_url: HttpUrl = Field(description="분석 완료 결과를 전달받을 콜백(스프링) URL")
     space_id: int | None = Field(default=None, strict=True, gt=0, le=2**63 - 1,
@@ -27,8 +27,6 @@ class SummaryRequest(BaseModel):
     def validate_storage_metadata(self):
         if (self.space_id is None) != (self.saved_at is None):
             raise ValueError("space_id와 saved_at은 함께 보내주세요.")
-        if self.space_id is not None and not 0 < self.bookmark_id <= 2**63 - 1:
-            raise ValueError("저장할 북마크 ID는 양의 BIGINT여야 합니다.")
         return self
 
 # 2. LLM이 생성할 구조화된 결과 포맷 (API 응답의 analysis 필드로도 그대로 재사용)
